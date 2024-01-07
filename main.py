@@ -254,7 +254,7 @@ for cam in df_cams.iterrows():
             
         # print results
         ls = list(map(lambda x: classes[x[2][0]] if x[2][0] in class_indices else "-", results))
-        print(cam[1]["url"], len(new_results), ls, str(time.time()-start)+"s", parsed_date or default_date)
+        print(cam[1]["url"], len(list(filter(lambda x: x[2][0] in class_indices, results))), ls, str(time.time()-start)+"s", parsed_date or default_date)
     except Exception as e:
         print(e)
 
