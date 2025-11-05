@@ -141,7 +141,7 @@ yolo_checks = [
     ('class YOLODetector(BaseDetector):', 'Inherits from BaseDetector'),
     ('def load_model(self):', 'Implements load_model'),
     ('def detect(self, image:', 'Implements detect'),
-    ('def get_model_info(self):', 'Implements get_model_info'),
+    ('def get_model_info(self)', 'Implements get_model_info'),
     ('COCO_CLASSES = [', 'Has COCO classes'),
 ]
 
@@ -182,7 +182,7 @@ with open('src/database.py', 'r') as f:
 db_checks = [
     ('class DatabaseManager:', 'DatabaseManager class'),
     ('def query(self, sql:', 'query method'),
-    ('def get_active_webcams(self):', 'get_active_webcams method'),
+    ('def get_active_webcams(self)', 'get_active_webcams method'),
     ('def insert_or_update(', 'insert_or_update method'),
     ('def store_detections(', 'store_detections method'),
 ]
