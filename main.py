@@ -1,37 +1,44 @@
 import cv2
 import numpy as np
 import urllib.request
-import matplotlib.pyplot as plt
 import psycopg2
-from sqlalchemy import create_engine
-import numpy as np
 import pandas as pd
-import sqlalchemy
 from easyocr import Reader
 import datetime
 import re
 import time
 import logging
 import os
+from dotenv import load_dotenv
 
-# Setup Database credentials here
-postgres_host = ""
+# Load environment variables from .env file
+load_dotenv()
+
+# Configuration constants
+DB_PORT = 5433
+TILE_SIZE = 416
+CONFIDENCE_THRESHOLD = 0.5
+NMS_THRESHOLD = 0.4
+SCALE_FACTOR = 0.00392 * 6
+OCR_LANGUAGES = ['de', 'en']
+
+# Setup Database credentials from environment variables or defaults
+postgres_host = os.getenv('POSTGRES_HOST', '')
 con = {
-    "username":"",
-    "password":"",
-    "connectstr":f"jdbc:postgresql://{postgres_host}:5433/",
-    "database":"",
-    "host":f"{postgres_host}",
-    "type":"public"
+    "username": os.getenv('POSTGRES_USER', ''),
+    "password": os.getenv('POSTGRES_PASSWORD', ''),
+    "connectstr": f"jdbc:postgresql://{postgres_host}:{DB_PORT}/",
+    "database": os.getenv('POSTGRES_DB', ''),
+    "host": f"{postgres_host}",
+    "type": "public"
 }
 
-# Specify yolo model name here
-# yolo_model = 'yolov3-tiny'
-yolo_model = 'yolov3'
+# Specify yolo model name here (can be overridden via YOLO_MODEL env var)
+yolo_model = os.getenv('YOLO_MODEL', 'yolov3')
 
-# check if postgres_host, con['userneame'] and con['password'] are set
+# check if postgres_host, con['username'] and con['password'] are set
 if not postgres_host or not con['username'] or not con['password'] or not con['database']:
-    raise Exception("Please set postgres_host, con['username'] and con['password'] and con['database']")
+    raise Exception("Please set POSTGRES_HOST, POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB environment variables")
 
 image_folder = (os.environ['DISK']+'/yolo') if 'DISK' in os.environ else 'images.nosync'
 model_folder = (os.environ['MODEL']+'/yolo') if 'MODEL' in os.environ else '.'
@@ -75,7 +82,7 @@ def query(query, db_conn):
         database=db_conn["database"],
         user=db_conn["username"],
         password=db_conn["password"],
-        port=5433
+        port=DB_PORT
     )
     # cur = conn.cursor()
     data = pd.read_sql_query(query, conn)
@@ -90,7 +97,7 @@ def insert_or_update(db_conn, df, table, conflict_rows=[], dtypes={}):
             database=db_conn["database"],
             user=db_conn["username"],
             password=db_conn["password"],
-            port=5433
+            port=DB_PORT
         )
         cur = conn.cursor()
         for row in df:
@@ -129,6 +136,13 @@ df_cams = query("select * from webcam_urls where debug = false", con)
 COLORS = np.random.uniform(0, 255, size=(len(classes), 3))
 default_date = datetime.datetime.now()
 
+# Load YOLO model and OCR reader once before processing (performance optimization)
+print("Loading YOLO model...")
+net = cv2.dnn.readNet(model_folder+f'/{yolo_model}.weights', model_folder+f'/{yolo_model}.cfg')
+print("Loading OCR reader...")
+reader = Reader(OCR_LANGUAGES)
+print("Models loaded successfully!")
+
 detection_results = []
 
 for cam in df_cams.iterrows():
@@ -137,14 +151,12 @@ for cam in df_cams.iterrows():
 
         id = cam[1]["id"]
 
-        # prepare image data and model
+        # prepare image data
         resp = urllib.request.urlopen(cam[1]["url"])
         image = np.asarray(bytearray(resp.read()), dtype="uint8")
         image = cv2.imdecode(image, cv2.IMREAD_COLOR)
-        net = cv2.dnn.readNet(model_folder+f'/{yolo_model}.weights', model_folder+f'/{yolo_model}.cfg')
 
         # try to parse date and time with ocr
-        reader = Reader(['de', 'en'])
         text_results = reader.readtext(image)
         s = " ".join(map(lambda x: x[1], text_results)).replace(",", "")
         re_date = re.search(r'\d{2}.\d{2}.\d{2,4}', s)
@@ -165,9 +177,8 @@ for cam in df_cams.iterrows():
 
 
         # segment image into smaller images
-        count_x = image.shape[1]//416
-        count_y = image.shape[0]//416
-        scale = 0.00392*6
+        count_x = image.shape[1]//TILE_SIZE
+        count_y = image.shape[0]//TILE_SIZE
         Width = w = image.shape[1] // count_x
         Height = h = image.shape[0] // count_y
         images = []
@@ -177,7 +188,7 @@ for cam in df_cams.iterrows():
                 images.append(i)
 
         # prepare nn input
-        blobs = [cv2.dnn.blobFromImage(image, scale, (416,416), (0,0,0), True, crop=False) for image in images]
+        blobs = [cv2.dnn.blobFromImage(image, SCALE_FACTOR, (TILE_SIZE,TILE_SIZE), (0,0,0), True, crop=False) for image in images]
 
         detections = 0
         results = []
@@ -189,16 +200,14 @@ for cam in df_cams.iterrows():
             class_ids = []
             confidences = []
             boxes = []
-            conf_threshold = 0.5
-            nms_threshold = 0.4
 
-            # search for detections with confidence > 0.5
+            # search for detections with confidence > threshold
             for out in outs:
                 for detection in out:
                     scores = detection[5:]
                     class_id = np.argmax(scores)
                     confidence = scores[class_id]
-                    if confidence > 0.5:
+                    if confidence > CONFIDENCE_THRESHOLD:
                         center_x = int(detection[0] * Width)
                         center_y = int(detection[1] * Height)
                         w = int(detection[2] * Width)
@@ -232,7 +241,7 @@ for cam in df_cams.iterrows():
         # draw bounding boxes
         for result in results:
             ix, boxes, class_ids, confidences = result
-            indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
+            indices = cv2.dnn.NMSBoxes(boxes, confidences, CONFIDENCE_THRESHOLD, NMS_THRESHOLD)
             
             for i in indices:
                 i = i
