@@ -6,7 +6,8 @@ pandas>=2.0.0
 python-dotenv>=1.0.0
 
 # OCR - PaddleOCR is 3-5x faster than EasyOCR
-paddleocr>=2.8.0
+# Using 2.8.x for better offline support (v3.x requires internet on first run)
+paddleocr>=2.8.0,<3.0.0
 
 # OCR (legacy - EasyOCR, use PaddleOCR for better performance)
 # easyocr>=1.7.0

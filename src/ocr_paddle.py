@@ -41,7 +41,7 @@ class PaddleTimestampExtractor:
             from paddleocr import PaddleOCR
         except ImportError:
             raise ImportError(
-                "PaddleOCR not installed. Install with: pip install paddleocr"
+                "PaddleOCR not installed. Install with: pip install 'paddleocr>=2.8,<3.0'"
             )
 
         # Use first language (PaddleOCR typically uses single language)
@@ -51,15 +51,23 @@ class PaddleTimestampExtractor:
         print(f"Loading PaddleOCR reader with language: {paddle_lang}...")
 
         # Initialize PaddleOCR with optimized settings
-        self.ocr = PaddleOCR(
-            lang=paddle_lang,
-            use_angle_cls=False,  # Disable angle classification for speed
-            show_log=False,       # Suppress verbose logs
-            use_gpu=False,        # CPU mode (change to True if GPU available)
-            det_db_thresh=0.3,    # Detection threshold
-            det_db_box_thresh=0.5,  # Box threshold
-            rec_batch_num=1,      # Batch size for recognition
-        )
+        # Using simple initialization compatible with v2.8.x
+        # Note: v2.8.x is more reliable for offline use
+        try:
+            self.ocr = PaddleOCR(
+                lang=paddle_lang,
+                use_angle_cls=False,  # Disable angle classification for speed
+                use_gpu=False,  # CPU mode (v2.8.x parameter)
+                show_log=False,  # Suppress logs (v2.8.x parameter)
+            )
+        except TypeError:
+            # Fallback for v3.x+ API (different parameters)
+            print("  Detected PaddleOCR v3.x+ - using simplified initialization")
+            print("  Note: First run requires internet to download models")
+            self.ocr = PaddleOCR(
+                lang=paddle_lang,
+                use_angle_cls=False,
+            )
 
         print("✓ PaddleOCR reader loaded successfully!")
         print("  Speed: 3-5x faster than EasyOCR")
