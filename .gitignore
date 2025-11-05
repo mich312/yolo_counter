@@ -159,5 +159,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-yolo*
+# YOLO model files (large binary files)
+yolov*.weights
+yolov*.cfg
+yolo*.txt
+yolo*.names
+
+# Image directories
 images*

@@ -1,277 +1,248 @@
+#!/usr/bin/env python3
+"""
+YOLO Counter - Modular Object Detection System
+
+Detects objects in webcam images and stores results in database.
+Now with modular architecture for easy model swapping!
+"""
+
 import cv2
 import numpy as np
 import urllib.request
-import psycopg2
-import pandas as pd
-from easyocr import Reader
 import datetime
-import re
 import time
-import logging
 import os
-from dotenv import load_dotenv
+import pandas as pd
+from typing import Optional
 
-# Load environment variables from .env file
-load_dotenv()
-
-# Configuration constants
-DB_PORT = 5433
-TILE_SIZE = 416
-CONFIDENCE_THRESHOLD = 0.5
-NMS_THRESHOLD = 0.4
-SCALE_FACTOR = 0.00392 * 6
-OCR_LANGUAGES = ['de', 'en']
-
-# Setup Database credentials from environment variables or defaults
-postgres_host = os.getenv('POSTGRES_HOST', '')
-con = {
-    "username": os.getenv('POSTGRES_USER', ''),
-    "password": os.getenv('POSTGRES_PASSWORD', ''),
-    "connectstr": f"jdbc:postgresql://{postgres_host}:{DB_PORT}/",
-    "database": os.getenv('POSTGRES_DB', ''),
-    "host": f"{postgres_host}",
-    "type": "public"
-}
-
-# Specify yolo model name here (can be overridden via YOLO_MODEL env var)
-yolo_model = os.getenv('YOLO_MODEL', 'yolov3')
-
-# check if postgres_host, con['username'] and con['password'] are set
-if not postgres_host or not con['username'] or not con['password'] or not con['database']:
-    raise Exception("Please set POSTGRES_HOST, POSTGRES_USER, POSTGRES_PASSWORD and POSTGRES_DB environment variables")
-
-image_folder = (os.environ['DISK']+'/yolo') if 'DISK' in os.environ else 'images.nosync'
-model_folder = (os.environ['MODEL']+'/yolo') if 'MODEL' in os.environ else '.'
+# Import our modular components
+from src.config import AppConfig
+from src.database import DatabaseManager
+from src.detectors.yolo import YOLODetector
+from src.ocr import TimestampExtractor
 
 
-classes = ["person"]
-# additional_classes = ["person", "bicycle", "car", "motorbike", "aeroplane", "bus", "train", "truck", "boat",
-#               "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat",
-#               "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
-#               "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat",
-#               "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-#               "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli",
-#               "carrot", "hot dog", "pizza", "donut", "cake", "chair", "sofa", "pottedplant", "bed",
-#               "diningtable", "toilet", "tvmonitor", "laptop", "mouse", "remote", "keyboard", "cell phone",
-#               "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors",
-#               "teddy bear", "hair drier", "toothbrush"
-# ]
+class WebcamProcessor:
+    """Main processor for webcam detection"""
 
-# what to detect
-detection_classes = ['person']
+    def __init__(self, config: AppConfig):
+        """
+        Initialize processor with configuration
 
-def get_output_layers(net):
-    layers = net.getLayerNames()
-    output_layers = [layers[i - 1] for i in net.getUnconnectedOutLayers()]
+        Args:
+            config: Application configuration
+        """
+        self.config = config
 
-    return output_layers
+        # Initialize components
+        print("Initializing components...")
+        self.db = DatabaseManager(config.database)
 
-# function to draw bounding box on the detected object with class name
-def draw_bounding_box(img, class_id, confidence, x, y, x_plus_w, y_plus_h):
-    if len(classes) <= class_id:
-        return
-    label = str(classes[class_id])
-    color = COLORS[class_id]
-    cv2.rectangle(img, (x,y), (x_plus_w,y_plus_h), color, 2)
-    cv2.putText(img, label, (x-10,y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        # Initialize detector (YOLO by default, but can be swapped!)
+        detector_config = {
+            'model_path': config.detector.model_path,
+            'config_path': config.detector.config_path,
+            'confidence_threshold': config.detector.confidence_threshold,
+            'nms_threshold': config.detector.nms_threshold,
+            'tile_size': config.detector.tile_size,
+            'scale_factor': config.detector.scale_factor
+        }
+        self.detector = YOLODetector(detector_config)
+        self.detector.load_model()
 
+        # Initialize OCR (if enabled)
+        self.ocr = None
+        if config.ocr.enabled:
+            self.ocr = TimestampExtractor(config.ocr.languages)
+            self.ocr.load_reader()
 
-def query(query, db_conn):
-    conn = psycopg2.connect(
-        host=db_conn["host"],
-        database=db_conn["database"],
-        user=db_conn["username"],
-        password=db_conn["password"],
-        port=DB_PORT
-    )
-    # cur = conn.cursor()
-    data = pd.read_sql_query(query, conn)
-    conn.commit()
-    # cur.close()
-    return data
+        print("Initialization complete!")
+        print(f"Detector: {self.detector.get_model_info()['name']}")
+        print(f"Detection classes: {config.detector.detection_classes}")
 
-def insert_or_update(db_conn, df, table, conflict_rows=[], dtypes={}):
-    try:
-        conn = psycopg2.connect(
-            host=db_conn["host"],
-            database=db_conn["database"],
-            user=db_conn["username"],
-            password=db_conn["password"],
-            port=DB_PORT
-        )
-        cur = conn.cursor()
-        for row in df:
-            insert_or_update_wrapped(cur, table, row, conflict_rows, dtypes)
-        conn.commit()
-        cur.close()
-        if conn: conn.close()
-    except (Exception, psycopg2.DatabaseError):
-        logging.exception("Error executing PostgreSQL")
+    def fetch_image(self, url: str) -> Optional[np.ndarray]:
+        """
+        Fetch image from URL
 
+        Args:
+            url: Image URL
 
-def insert_or_update_wrapped(cur, table, data, conflict_rows=[], dtypes={}):
-    data = {k:v.replace("'","''") if type(v) is str else v for (k,v) in data.items()}
-    keys = ", ".join(data.keys())
-    is_number = lambda x:(type(x) is int or type(x) is float)
-    get_dtype = lambda x:(f"::{dtypes[x]}") if x in dtypes else ""
-    values = ", ".join(list(map(lambda x: f"{x[1]}" if is_number(x) else ("null" if x[1] is None else f"'{x[1]}'")+get_dtype(x[0]), data.items())))
-    conflict_rows_s = ", ".join(conflict_rows)
-    non_conflict_values = ", ".join(list(map(lambda x: f"{x[0]}={x[1]}" if is_number(x[1]) else (f"{x[0]}=null" if x[1] is None else  f"{x[0]}='{x[1]}'"), filter(lambda tpl: not tpl[0] in conflict_rows, data.items()))))
-    if len(conflict_rows) == 0:
-        query = f"""
-insert into {table} ({keys}) 
-values({values});"""
-    else:
-        query = f"""
-insert into {table} ({keys}) 
-values({values})
-on conflict ({conflict_rows_s}) do
-update set {non_conflict_values}"""
-    cur.execute(query)
+        Returns:
+            Image as numpy array, or None if fetch failed
+        """
+        try:
+            resp = urllib.request.urlopen(url)
+            image_data = np.asarray(bytearray(resp.read()), dtype="uint8")
+            image = cv2.imdecode(image_data, cv2.IMREAD_COLOR)
+            return image
+        except Exception as e:
+            print(f"Failed to fetch image from {url}: {e}")
+            return None
 
+    def extract_timestamp(self, image: np.ndarray) -> Optional[datetime.datetime]:
+        """
+        Extract timestamp from image using OCR
 
-df_cams = query("select * from webcam_urls where debug = false", con)
+        Args:
+            image: Input image
 
+        Returns:
+            Extracted datetime, or None if extraction failed
+        """
+        if self.ocr is None:
+            return None
 
-COLORS = np.random.uniform(0, 255, size=(len(classes), 3))
-default_date = datetime.datetime.now()
+        return self.ocr.extract_timestamp(image)
 
-# Load YOLO model and OCR reader once before processing (performance optimization)
-print("Loading YOLO model...")
-net = cv2.dnn.readNet(model_folder+f'/{yolo_model}.weights', model_folder+f'/{yolo_model}.cfg')
-print("Loading OCR reader...")
-reader = Reader(OCR_LANGUAGES)
-print("Models loaded successfully!")
+    def save_images(self, webcam_id: str, image: np.ndarray,
+                   annotated_image: np.ndarray, timestamp: datetime.datetime):
+        """
+        Save raw and annotated images to disk
 
-detection_results = []
+        Args:
+            webcam_id: Webcam UUID
+            image: Raw image
+            annotated_image: Image with detection boxes
+            timestamp: Image timestamp
+        """
+        folder = f"{self.config.storage.image_folder}/{webcam_id}"
+        os.makedirs(folder, exist_ok=True)
 
-for cam in df_cams.iterrows():
-    try:
-        start = time.time()
+        # Save raw image
+        raw_path = f"{folder}/raw_{timestamp}.jpg"
+        cv2.imwrite(raw_path, image)
 
-        id = cam[1]["id"]
+        # Save annotated image
+        annotated_path = f"{folder}/{timestamp}.jpg"
+        cv2.imwrite(annotated_path, annotated_image)
 
-        # prepare image data
-        resp = urllib.request.urlopen(cam[1]["url"])
-        image = np.asarray(bytearray(resp.read()), dtype="uint8")
-        image = cv2.imdecode(image, cv2.IMREAD_COLOR)
+    def process_webcam(self, webcam_id: str, webcam_url: str) -> Optional[dict]:
+        """
+        Process a single webcam
 
-        # try to parse date and time with ocr
-        text_results = reader.readtext(image)
-        s = " ".join(map(lambda x: x[1], text_results)).replace(",", "")
-        re_date = re.search(r'\d{2}.\d{2}.\d{2,4}', s)
-        if re_date:
-            s = s.replace(re_date.group(0), "")
-        re_time = re.search(r'\d{2}(:|\.)\d{2}', s)
-        parsed_date = None
-        if re_date and re_time:
-            date = re_date.group(0).replace(" ", ".") + " " + re_time.group(0).replace(" ", ".")
-            try:
-                parsed_date = datetime.datetime.strptime(date, '%d.%m.%Y %H.%M')
-            except ValueError:
-                try:
-                    parsed_date = datetime.datetime.strptime(date, '%d.%m.%Y %H:%M')
-                except ValueError as e:
-                    print("Failed to parse date", date)
-                    print(e)
+        Args:
+            webcam_id: Webcam UUID
+            webcam_url: Webcam image URL
 
+        Returns:
+            Detection result dictionary, or None if processing failed
+        """
+        start_time = time.time()
 
-        # segment image into smaller images
-        count_x = image.shape[1]//TILE_SIZE
-        count_y = image.shape[0]//TILE_SIZE
-        Width = w = image.shape[1] // count_x
-        Height = h = image.shape[0] // count_y
-        images = []
-        for x in range(count_x):
-            for y in range(count_y):
-                i = image[y*h:min(y*h+h, image.shape[0]), x*w:min(x*w+w, image.shape[1])]
-                images.append(i)
+        try:
+            # Fetch image
+            image = self.fetch_image(webcam_url)
+            if image is None:
+                return None
 
-        # prepare nn input
-        blobs = [cv2.dnn.blobFromImage(image, SCALE_FACTOR, (TILE_SIZE,TILE_SIZE), (0,0,0), True, crop=False) for image in images]
+            # Extract timestamp
+            timestamp = self.extract_timestamp(image)
+            if timestamp is None:
+                timestamp = datetime.datetime.now()
+                print(f"⚠ Could not extract timestamp, using current time: {timestamp}")
 
-        detections = 0
+            # Perform detection
+            detections = self.detector.detect(image)
+
+            # Filter by configured classes
+            filtered_detections = self.detector.filter_by_class(
+                detections,
+                self.config.detector.detection_classes
+            )
+
+            # Count detections
+            detection_count = len(filtered_detections)
+            counts_by_class = self.detector.count_by_class(filtered_detections)
+
+            # Draw boxes on image
+            annotated_image = self.detector.draw_detections(image, filtered_detections)
+
+            # Save images
+            self.save_images(webcam_id, image, annotated_image, timestamp)
+
+            # Calculate processing time
+            elapsed = time.time() - start_time
+
+            # Print results
+            print(f"✓ {webcam_url}")
+            print(f"  Detections: {detection_count} {counts_by_class}")
+            print(f"  Timestamp: {timestamp}")
+            print(f"  Processing time: {elapsed:.2f}s")
+
+            return {
+                'webcam': webcam_id,
+                'date': timestamp,
+                'detections': detection_count
+            }
+
+        except Exception as e:
+            print(f"✗ Error processing {webcam_url}: {e}")
+            return None
+
+    def run(self):
+        """Main processing loop"""
+        print("\n" + "=" * 60)
+        print("Starting webcam processing...")
+        print("=" * 60 + "\n")
+
+        # Get active webcams from database
+        webcams = self.db.get_active_webcams()
+        print(f"Found {len(webcams)} active webcam(s)\n")
+
+        # Process each webcam
         results = []
-        for ix, blob in enumerate(blobs):
-            net.setInput(blob)
-            outs = net.forward(get_output_layers(net))
+        for idx, row in webcams.iterrows():
+            webcam_id = row['id']
+            webcam_url = row['url']
+            webcam_name = row.get('name', 'Unknown')
 
-            # initialization
-            class_ids = []
-            confidences = []
-            boxes = []
+            print(f"[{idx + 1}/{len(webcams)}] Processing: {webcam_name}")
 
-            # search for detections with confidence > threshold
-            for out in outs:
-                for detection in out:
-                    scores = detection[5:]
-                    class_id = np.argmax(scores)
-                    confidence = scores[class_id]
-                    if confidence > CONFIDENCE_THRESHOLD:
-                        center_x = int(detection[0] * Width)
-                        center_y = int(detection[1] * Height)
-                        w = int(detection[2] * Width)
-                        h = int(detection[3] * Height)
-                        x = center_x - w / 2
-                        y = center_y - h / 2
-                        class_ids.append(class_id)
-                        confidences.append(float(confidence))
-                        boxes.append([x, y, w, h])
+            result = self.process_webcam(webcam_id, webcam_url)
+            if result:
+                results.append(result)
 
-            detections += len(boxes)
-            if len(boxes) > 0:
-                results.append((ix, boxes, class_ids, confidences))
+            print()
 
-        # get indices of classes to detect and prepare data for db
-        class_indices = list(map(lambda x: classes.index(x), detection_classes))
-        detection_results += (new_results := [{
-            "webcam":id,
-            "date": parsed_date or default_date,
-            "detections": len(list(filter(lambda x: x[2][0] in class_indices, results)))
-        }])
+        # Store results in database
+        if results:
+            print(f"Storing {len(results)} result(s) in database...")
+            df_results = pd.DataFrame(results)
+            self.db.store_detections(df_results)
+            print("✓ Results stored successfully!")
+            print("\nResults summary:")
+            print(df_results)
+        else:
+            print("⚠ No results to store")
 
-        # store raw images locally
-        folder = image_folder + f'/{id}'
-        if not os.path.exists(folder):
-            os.makedirs(folder)
-        if len(new_results) > 0:
-            path = image_folder + f'/{id}/raw_{parsed_date or default_date}.jpg'
-            cv2.imwrite(path, image)
-        
-        # draw bounding boxes
-        for result in results:
-            ix, boxes, class_ids, confidences = result
-            indices = cv2.dnn.NMSBoxes(boxes, confidences, CONFIDENCE_THRESHOLD, NMS_THRESHOLD)
-            
-            for i in indices:
-                i = i
-                box = boxes[i]
-                x = box[0]
-                y = box[1]
-                w = box[2]
-                h = box[3]
-                draw_bounding_box(images[ix], 
-                                class_ids[i], 
-                                confidences[i], 
-                                round(x),     round(y), 
-                                round(x+w),   round(y+h))
-        
-        # store raw images with detections locally
-        if len(new_results) > 0:
-            path = image_folder + f'/{id}/{parsed_date or default_date}.jpg'
-            cv2.imwrite(path, image)
-            
-        # print results
-        ls = list(map(lambda x: classes[x[2][0]] if x[2][0] in class_indices else "-", results))
-        print(cam[1]["url"], len(list(filter(lambda x: x[2][0] in class_indices, results))), ls, str(time.time()-start)+"s", parsed_date or default_date)
+        print("\n" + "=" * 60)
+        print("Processing complete!")
+        print("=" * 60)
+
+
+def main():
+    """Main entry point"""
+    try:
+        # Load configuration
+        print("Loading configuration...")
+        config = AppConfig.from_env()
+        print("✓ Configuration loaded\n")
+
+        # Create processor and run
+        processor = WebcamProcessor(config)
+        processor.run()
+
+    except ValueError as e:
+        print(f"Configuration error: {e}")
+        print("\nPlease check your .env file and ensure all required variables are set.")
+        print("See .env.example for reference.")
+        exit(1)
     except Exception as e:
-        print(e)
+        print(f"Unexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        exit(1)
 
-# localize timestamps and store in db
-df = pd.DataFrame(detection_results)
-df.index = df.date
-df.index = df.index.tz_localize('Europe/Berlin')
-df.index = df.index.tz_convert('UTC')
-df.date = df.index
-insert_or_update(con, df.to_dict(orient='records'), 'webcam_detections', ['webcam', 'date'])
-print(df)
+
+if __name__ == "__main__":
+    main()
