@@ -151,51 +151,7 @@ class RTDETRDetector(BaseDetector):
             'paper': 'DETRs Beat YOLOs on Real-time Object Detection (Baidu, 2023)'
         }
 
-    def draw_detections(self, image: np.ndarray, results: List[DetectionResult]) -> np.ndarray:
-        """
-        Draw bounding boxes on image
-
-        Args:
-            image: Input image
-            results: List of detection results
-
-        Returns:
-            Image with bounding boxes drawn
-        """
-        import cv2
-
-        output = image.copy()
-
-        # Generate colors for each class
-        np.random.seed(42)  # Consistent colors
-        colors = {}
-        for result in results:
-            if result.class_id not in colors:
-                colors[result.class_id] = tuple(map(int, np.random.randint(0, 255, 3)))
-
-        for result in results:
-            x, y, w, h = result.bbox
-            color = colors[result.class_id]
-
-            # Draw rectangle
-            cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
-
-            # Draw label with background
-            label = f"{result.class_name}: {result.confidence:.2f}"
-            (label_w, label_h), baseline = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2
-            )
-
-            # Label background
-            cv2.rectangle(output, (x, y - label_h - 10), (x + label_w, y), color, -1)
-
-            # Label text
-            cv2.putText(
-                output, label, (x, y - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2
-            )
-
-        return output
+    # draw_detections() inherited from BaseDetector
 
 
 # Convenience function for quick model creation

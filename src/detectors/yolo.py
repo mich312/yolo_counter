@@ -182,29 +182,4 @@ class YOLODetector(BaseDetector):
 
         return all_results
 
-    def draw_detections(self, image: np.ndarray, results: List[DetectionResult]) -> np.ndarray:
-        """
-        Draw bounding boxes on image
-
-        Args:
-            image: Input image
-            results: List of detection results
-
-        Returns:
-            Image with bounding boxes drawn
-        """
-        output = image.copy()
-
-        for result in results:
-            x, y, w, h = result.bbox
-            color = self.colors[result.class_id].tolist()
-
-            # Draw rectangle
-            cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
-
-            # Draw label
-            label = f"{result.class_name}: {result.confidence:.2f}"
-            cv2.putText(output, label, (x - 10, y - 10),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-
-        return output
+    # draw_detections() inherited from BaseDetector - uses self.colors automatically

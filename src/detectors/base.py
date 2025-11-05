@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import List, Tuple
 import numpy as np
+import cv2
 
 
 @dataclass
@@ -122,3 +123,42 @@ class BaseDetector(ABC):
         for result in results:
             counts[result.class_name] = counts.get(result.class_name, 0) + 1
         return counts
+
+    def draw_detections(self, image: np.ndarray, results: List[DetectionResult],
+                       colors: np.ndarray = None) -> np.ndarray:
+        """
+        Draw bounding boxes on image (shared implementation)
+
+        Args:
+            image: Input image
+            results: List of detection results
+            colors: Optional color array for classes (BGR format)
+
+        Returns:
+            Image with bounding boxes drawn
+        """
+        output = image.copy()
+
+        # Generate default colors if not provided
+        if colors is None:
+            np.random.seed(42)
+            colors = np.random.randint(0, 255, size=(len(self.classes), 3), dtype=np.uint8)
+
+        for result in results:
+            x, y, w, h = result.bbox
+
+            # Use color for this class (or default to green)
+            if result.class_id < len(colors):
+                color = colors[result.class_id].tolist()
+            else:
+                color = (0, 255, 0)  # Default green
+
+            # Draw rectangle
+            cv2.rectangle(output, (x, y), (x + w, y + h), color, 2)
+
+            # Draw label
+            label = f"{result.class_name}: {result.confidence:.2f}"
+            cv2.putText(output, label, (x - 10, y - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        return output

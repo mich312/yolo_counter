@@ -5,10 +5,10 @@ Faster alternative to EasyOCR (3-5x speedup)
 Model size: <10MB vs ~100MB for EasyOCR
 """
 
-import re
 import datetime
 import numpy as np
 from typing import Optional, List
+from .ocr_base import TimestampParser
 
 
 class PaddleTimestampExtractor:
@@ -101,37 +101,15 @@ class PaddleTimestampExtractor:
                 if len(line) >= 2:
                     text_parts.append(line[1][0])  # line[1][0] is the text
 
-            text = " ".join(text_parts).replace(",", "")
+            text = " ".join(text_parts)
 
-            # Extract date pattern: DD.MM.YYYY or DD.MM.YY
-            date_match = re.search(r'\d{2}.\d{2}.\d{2,4}', text)
-            if not date_match:
-                return None
+            # Parse timestamp using shared logic
+            timestamp = TimestampParser.parse_timestamp_from_text(text)
 
-            # Remove date from text to avoid interference with time search
-            date_str = date_match.group(0)
-            text = text.replace(date_str, "")
+            if timestamp is None:
+                print(f"Failed to parse timestamp from text: {text}")
 
-            # Extract time pattern: HH:MM or HH.MM
-            time_match = re.search(r'\d{2}(:|\.)\d{2}', text)
-            if not time_match:
-                return None
-
-            time_str = time_match.group(0)
-
-            # Combine date and time
-            datetime_str = date_str.replace(" ", ".") + " " + time_str.replace(" ", ".")
-
-            # Try parsing with different formats
-            for fmt in ['%d.%m.%Y %H.%M', '%d.%m.%Y %H:%M', '%d.%m.%y %H.%M', '%d.%m.%y %H:%M']:
-                try:
-                    parsed_date = datetime.datetime.strptime(datetime_str, fmt)
-                    return parsed_date
-                except ValueError:
-                    continue
-
-            print(f"Failed to parse date: {datetime_str}")
-            return None
+            return timestamp
 
         except Exception as e:
             print(f"PaddleOCR extraction error: {e}")
