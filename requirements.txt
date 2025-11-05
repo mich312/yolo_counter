@@ -1,6 +1,12 @@
+# Core dependencies
 opencv-python>=4.8.0
 numpy>=1.24.0
 psycopg2-binary>=2.9.0
 pandas>=2.0.0
-easyocr>=1.7.0
 python-dotenv>=1.0.0
+
+# OCR (optional but recommended)
+easyocr>=1.7.0
+
+# Modern detectors (YOLO11, RT-DETR) - highly recommended
+ultralytics>=8.3.0
