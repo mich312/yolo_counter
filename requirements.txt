@@ -5,8 +5,11 @@ psycopg2-binary>=2.9.0
 pandas>=2.0.0
 python-dotenv>=1.0.0
 
-# OCR (optional but recommended)
-easyocr>=1.7.0
+# OCR - PaddleOCR is 3-5x faster than EasyOCR
+paddleocr>=2.8.0
+
+# OCR (legacy - EasyOCR, use PaddleOCR for better performance)
+# easyocr>=1.7.0
 
 # Modern detectors (YOLO11, RT-DETR) - highly recommended
 ultralytics>=8.3.0

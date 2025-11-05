@@ -78,13 +78,15 @@ class OCRConfig:
     """OCR configuration"""
     languages: List[str]
     enabled: bool
+    engine: str  # 'paddle' (default, 3-5x faster) or 'easy' (legacy)
 
     @classmethod
     def from_env(cls):
         """Create from environment variables"""
         return cls(
             languages=os.getenv('OCR_LANGUAGES', 'de,en').split(','),
-            enabled=os.getenv('OCR_ENABLED', 'true').lower() == 'true'
+            enabled=os.getenv('OCR_ENABLED', 'true').lower() == 'true',
+            engine=os.getenv('OCR_ENGINE', 'paddle').lower()  # paddle (default) or easy
         )
 
 
@@ -146,7 +148,8 @@ class AppConfig:
             },
             'ocr': {
                 'languages': self.ocr.languages,
-                'enabled': self.ocr.enabled
+                'enabled': self.ocr.enabled,
+                'engine': self.ocr.engine
             },
             'storage': {
                 'image_folder': self.storage.image_folder

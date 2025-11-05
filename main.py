@@ -19,7 +19,8 @@ from typing import Optional
 from src.config import AppConfig
 from src.database import DatabaseManager
 from src.detectors.yolo import YOLODetector
-from src.ocr import TimestampExtractor
+from src.ocr import TimestampExtractor as EasyOCRExtractor
+from src.ocr_paddle import PaddleTimestampExtractor
 
 
 class WebcamProcessor:
@@ -53,7 +54,13 @@ class WebcamProcessor:
         # Initialize OCR (if enabled)
         self.ocr = None
         if config.ocr.enabled:
-            self.ocr = TimestampExtractor(config.ocr.languages)
+            # Select OCR engine based on config
+            if config.ocr.engine == 'paddle':
+                print("Using PaddleOCR (3-5x faster)")
+                self.ocr = PaddleTimestampExtractor(config.ocr.languages)
+            else:
+                print("Using EasyOCR (legacy)")
+                self.ocr = EasyOCRExtractor(config.ocr.languages)
             self.ocr.load_reader()
 
         print("Initialization complete!")
